@@ -1,0 +1,2 @@
+tableauserverclient==0.14.1
+tableauhyperapi==0.0.11952
