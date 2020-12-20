@@ -1,4 +1,5 @@
 import argparse
+import json
 import tableauserverclient as TSC
 from tableauserverclient import ServerResponseError
 import tableauhyperapi as TH
@@ -17,6 +18,7 @@ def main():
 
     parser = argparse.ArgumentParser(description='perform incremental refresh on datasources',
                                      fromfile_prefix_chars='@')
+    parser.add_argument('--config', '-c', required=True, help='configuration file')
     parser.add_argument('--server', '-s', required=True, help='server address')
     parser.add_argument('--username', '-u', required=True, help='username to sign in with into server')
     parser.add_argument('-p', required=True, help='password corresponding to the username, use @file.txt to read from file',
@@ -42,6 +44,9 @@ def main():
     # Set logging level based on user input, or error by default
     logging_level = getattr(logging, args.logging_level.upper())
     logging.basicConfig(level=logging_level)
+
+    with open(args.config, 'r') as f:
+        config = json.load(f)
 
     signal.signal(signal.SIGALRM, handler)
 
