@@ -133,3 +133,6 @@ dmypy.json
 
 # Tableau data sources
 *.tds*
+
+# do not push configuration files
+config.json
