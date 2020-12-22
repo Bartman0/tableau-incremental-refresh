@@ -1,20 +1,45 @@
 import argparse
+import os
 import json
 import tableauserverclient as TSC
 from tableauserverclient import ServerResponseError
-import tableauhyperapi as TH
+from tableauhyperapi import HyperProcess, Telemetry, Connection, CreateMode, TableName, escape_string_literal
 import logging
 import signal
 from tableaudocumentapi import Datasource
+import jaydebeapi as db
+from pathlib import Path
+
+
+# global for configuration
+config = dict()
 
 
 def handler(signum, frame):
     raise RuntimeError("timeout waiting for jobs to finish")
 
 
+def database_connect(name):
+    database = config['databases'][name]
+    connection = db.connect(database['class'], database['url'], driver_args=database['args'], jars=database['jars'])
+    return connection
+
+
+def hyper_prepare(hyper_path, table_name, functional_ordered_column, column_value):
+    path_to_database = Path(hyper_path).expanduser().resolve()
+    with HyperProcess(telemetry=Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU, user_agent=os.path.basename(__file__)) as hyper:
+        with Connection(endpoint=hyper.endpoint, database=path_to_database) as connection:
+            # The table names in the "Extract" schema (the default schema).
+            table_names = connection.catalog.get_table_names(schema="Extract")
+            table_name = TableName("Extract", "Extract")
+            rows_affected = connection.execute_command(command=f"DELETE FROM {table_name} WHERE {functional_ordered_column} >= {column_value}")
+            return rows_affected
+
+
 def main():
     # lees configuratie uit, met naam van update kolom, functionele ID, datasource naam, vorige_update_datum
     # lees database config uit bestand? of gewoon ook op de command-line? jdbc url, user, passwd
+    global config
 
     parser = argparse.ArgumentParser(description='perform incremental refresh on datasources',
                                      fromfile_prefix_chars='@')
@@ -47,6 +72,17 @@ def main():
 
     with open(args.config, 'r') as f:
         config = json.load(f)
+
+    with database_connect('HANSANDERS_WD') as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(f"""select min({config['datasources']['Sales']['functional_ordered_column']}) 
+                                from {config['datasources']['Sales']['reference_table']} 
+                                where {config['parameters']['update_datetime_column']} > current_date - 100""")
+            functional_ordered_column_value = cursor.fetchall()
+
+    hyper_prepare("Store visits.hyper", config['datasources']['Sales']['extract_table'],
+                  config['datasources']['Sales']['functional_ordered_column'],
+                  functional_ordered_column_value)
 
     signal.signal(signal.SIGALRM, handler)
 
