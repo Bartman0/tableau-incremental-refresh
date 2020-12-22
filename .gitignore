@@ -132,8 +132,8 @@ dmypy.json
 .idea/
 
 # Tableau data sources
-**/*.tds*
-**/*.hyper
+*.tds*
+*.hyper
 
 # do not push configuration files
-**/config.json
+config.json
