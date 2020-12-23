@@ -31,8 +31,17 @@ def hyper_prepare(hyper_path, table_name, functional_ordered_column, column_valu
         with Connection(endpoint=hyper.endpoint, database=path_to_database) as connection:
             # The table names in the "Extract" schema (the default schema).
             table_names = connection.catalog.get_table_names(schema="Extract")
+            for table in table_names:
+                table_definition = connection.catalog.get_table_definition(name=table)
+                print(f"Table {table.name} has qualified name: {table}")
+                for column in table_definition.columns:
+                    print(f"Column {column.name} has type={column.type} and nullability={column.nullability}")
+                print("")
+
             table_name = TableName("Extract", "Extract")
-            rows_affected = connection.execute_command(command=f"DELETE FROM {table_name} WHERE {functional_ordered_column} >= {column_value}")
+            # XXX override for now
+            functional_ordered_column = "DN_DATE"
+            rows_affected = connection.execute_command(command=f'DELETE FROM {table_name} WHERE "{functional_ordered_column}" >= {column_value}')
             return rows_affected
 
 
@@ -78,9 +87,14 @@ def main():
             cursor.execute(f"""select min({config['datasources']['Sales']['functional_ordered_column']}) 
                                 from {config['datasources']['Sales']['reference_table']} 
                                 where {config['parameters']['update_datetime_column']} > current_date - 100""")
-            functional_ordered_column_value = cursor.fetchall()
+            result_rows = cursor.fetchall()
+            functional_ordered_column_type = cursor.description[0][1]
+            functional_ordered_column_value = result_rows[0][0]
+            if functional_ordered_column_type in set([db.DATE, db.TIME, db.DATETIME, db.STRING, db.TEXT]):
+                functional_ordered_column_value = f"'{functional_ordered_column_value}'"
 
-    hyper_prepare("Store visits.hyper", config['datasources']['Sales']['extract_table'],
+
+    rows_affected = hyper_prepare("Store visits.hyper", config['datasources']['Sales']['extract_table'],
                   config['datasources']['Sales']['functional_ordered_column'],
                   functional_ordered_column_value)
 
@@ -90,6 +104,7 @@ def main():
     # use api version corresponding with server version
     server = TSC.Server(args.server, use_server_version=True)
 
+    jobs = dict()
     with server.auth.sign_in(tableau_auth):
         for ds in TSC.Pager(server.datasources):
             logging.debug("{0} ({1})".format(ds.name, ds.project_name))
