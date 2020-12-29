@@ -1,14 +1,22 @@
 {
   "databases": {
     "HANSANDERS_WD": {
-      "url": "jdbc:netezza://prd-nps-06.hosting.inergy.nl:5480/HANSANDERS_WD",
-      "driver": "drivers/nzjdbc_v7.2.1.5-P1.jar",
-      "class": "org.netezza.Driver"
+      "url": "jdbc:netezza://acc-nps-07.hosting.inergy.nl:5480/HANSANDERS_WD",
+      "jars": "drivers/nzjdbc_v7.2.1.5-P1.jar",
+      "class": "org.netezza.Driver",
+      "args": { "user": "HANSANDERS_WDR", "password": "dd2554fa56" }
     }
   },
   "datasources": {
     "Sales": {
-      "functional_columns": [ "DN_STORE_ID", "DN_ORDER_NR", "DN_ORDERLINE_NR", "DN_ORDERLINE_HISNR", "DN_SALES_TYPE" ]
+      "functional_ordered_column": "DA_DATE_CREATION",
+      "extract_table": "WVFE_SALES_COR",
+      "reference_table": "WTFE_SALES"
+    },
+    "Visits": {
+      "functional_ordered_column": "DN_DATE",
+      "extract_table": "WTFE_STORE_VISIT",
+      "reference_table": "WTFE_STORE_VISIT"
     }
   },
   "parameters": {

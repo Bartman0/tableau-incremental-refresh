@@ -84,8 +84,8 @@ def main():
 
     with database_connect('HANSANDERS_WD') as connection:
         with connection.cursor() as cursor:
-            cursor.execute(f"""select min({config['datasources']['Sales']['functional_ordered_column']}) 
-                                from {config['datasources']['Sales']['reference_table']} 
+            cursor.execute(f"""select min({config['datasources']['Visits']['functional_ordered_column']}) 
+                                from {config['datasources']['Visits']['reference_table']} 
                                 where {config['parameters']['update_datetime_column']} > current_date - 100""")
             result_rows = cursor.fetchall()
             functional_ordered_column_type = cursor.description[0][1]
@@ -94,8 +94,8 @@ def main():
                 functional_ordered_column_value = f"'{functional_ordered_column_value}'"
 
 
-    rows_affected = hyper_prepare("Store visits.hyper", config['datasources']['Sales']['extract_table'],
-                  config['datasources']['Sales']['functional_ordered_column'],
+    rows_affected = hyper_prepare("Store visits.hyper", config['datasources']['Visits']['extract_table'],
+                  config['datasources']['Visits']['functional_ordered_column'],
                   functional_ordered_column_value)
 
     signal.signal(signal.SIGALRM, handler)
