@@ -47,6 +47,7 @@ def get_database_min_functional_ordered_column_value(database, datasource, updat
                     functional_ordered_column_value_previous = 0    # TODO: determine absolute minimum value
             if functional_ordered_column_type in {db.DATE, db.TIME, db.DATETIME, db.STRING, db.TEXT}:
                 functional_ordered_column_value_min = f"'{functional_ordered_column_value_min}'"
+                functional_ordered_column_value_previous = f"'{functional_ordered_column_value_previous}'"
     return functional_ordered_column_value_min, functional_ordered_column_value_previous
 
 
@@ -80,19 +81,23 @@ def refresh_datasource(server, project, ds):
             if tds.extract.connection.dbclass != 'hyper':
                 logging.error(f"datasource {ds} is not based on a hyper extract")
                 return
+            if not tds.extract.has_refresh():
+                logging.error(f"datasource {ds} does not have refresh information")
+                return
             database = tds.connections[0].dbname
             # TODO: determine update_value, last seen value as retrieved from a reference table???
+            update_value = 'current_date -100'
             functional_ordered_column_value_min, functional_ordered_column_value_previous = get_database_min_functional_ordered_column_value(database, ds, update_value)
-            hyper_file = tds.extract.connection[0].dbname
-            rows_affected = hyper_prepare(hyper_file, config['datasources'][ds]['functional_ordered_column'],
-                                          functional_ordered_column_value_min)
-            logging.info(f"datasource {ds} with hyper file {hyper_file}: {rows_affected} rows were deleted")
-            tds.extract.refresh.refresh_events[-1].increment_value = functional_ordered_column_value_previous
+            hyper_file = tds.extract.connection.dbname
+            # rows_affected = hyper_prepare(hyper_file, config['datasources'][ds]['functional_ordered_column'],
+            #                               functional_ordered_column_value_min)
+            # logging.info(f"datasource {ds} with hyper file {hyper_file}: {rows_affected} rows were deleted")
+            # tds.extract.refresh.refresh_events[-1].increment_value = functional_ordered_column_value_previous
             tds.save_as(ds_file)
             credentials = ConnectionCredentials(config['databases'][database]['args']['user'], config['databases'][database]['args']['password'], embed=True)
             new_ds = tsc.DatasourceItem(project.id)
             new_ds.name = ds
-            server.datasources.publish(new_ds, ds, mode=tsc.Server.PublishMode.Overwrite, connection_credentials=credentials)
+            server.datasources.publish(new_ds, ds_file, mode=tsc.Server.PublishMode.Overwrite, connection_credentials=credentials)
             try:
                 job = (datasource, server.datasources.refresh(datasource))
             except ServerResponseError as e:
