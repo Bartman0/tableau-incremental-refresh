@@ -10,12 +10,10 @@
   "datasources": {
     "Sales": {
       "functional_ordered_column": "DA_DATE_CREATION",
-      "extract_table": "WVFE_SALES_COR",
       "reference_table": "WTFE_SALES"
     },
     "Visits": {
       "functional_ordered_column": "DN_DATE",
-      "extract_table": "WTFE_STORE_VISIT",
       "reference_table": "WTFE_STORE_VISIT"
     }
   },

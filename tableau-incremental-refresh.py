@@ -1,15 +1,17 @@
 import argparse
-import os
+import getpass
 import json
-import tableauserverclient as TSC
-from tableauserverclient import ServerResponseError
-from tableauhyperapi import HyperProcess, Telemetry, Connection, CreateMode, TableName, escape_string_literal
 import logging
+import os
 import signal
-from tableaudocumentapi import Datasource
-import jaydebeapi as db
+import time
 from pathlib import Path
 
+import jaydebeapi as db
+import tableauserverclient as tsc
+from tableaudocumentapi import Datasource
+from tableauhyperapi import HyperProcess, Telemetry, Connection, TableName
+from tableauserverclient import ServerResponseError, ConnectionCredentials
 
 # global for configuration
 config = dict()
@@ -25,24 +27,105 @@ def database_connect(name):
     return connection
 
 
-def hyper_prepare(hyper_path, table_name, functional_ordered_column, column_value):
+def get_database_min_functional_ordered_column_value(database, datasource, update_value):
+    with database_connect(database) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(f"""select distinct {config['datasources'][datasource]['functional_ordered_column']} 
+                                from {config['datasources'][datasource]['reference_table']} 
+                                where {config['parameters']['update_datetime_column']} > {update_value}
+                                order by {config['datasources'][datasource]['functional_ordered_column']}
+                                limit 2""")
+            result_rows = cursor.fetchall()
+            functional_ordered_column_type = cursor.description[0][1]
+            functional_ordered_column_value_min = result_rows[0][0]
+            if len(result_rows) > 1:
+                functional_ordered_column_value_previous = result_rows[1][0]
+            else:
+                if functional_ordered_column_type in {db.DATE, db.TIME, db.DATETIME, db.STRING, db.TEXT}:
+                    functional_ordered_column_value_previous = ''
+                else:
+                    functional_ordered_column_value_previous = 0    # TODO: determine absolute minimum value
+            if functional_ordered_column_type in {db.DATE, db.TIME, db.DATETIME, db.STRING, db.TEXT}:
+                functional_ordered_column_value_min = f"'{functional_ordered_column_value_min}'"
+    return functional_ordered_column_value_min, functional_ordered_column_value_previous
+
+
+def hyper_prepare(hyper_path, functional_ordered_column, column_value):
     path_to_database = Path(hyper_path).expanduser().resolve()
     with HyperProcess(telemetry=Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU, user_agent=os.path.basename(__file__)) as hyper:
         with Connection(endpoint=hyper.endpoint, database=path_to_database) as connection:
-            # The table names in the "Extract" schema (the default schema).
-            table_names = connection.catalog.get_table_names(schema="Extract")
-            for table in table_names:
-                table_definition = connection.catalog.get_table_definition(name=table)
-                print(f"Table {table.name} has qualified name: {table}")
-                for column in table_definition.columns:
-                    print(f"Column {column.name} has type={column.type} and nullability={column.nullability}")
-                print("")
-
+            # # The table names in the "Extract" schema (the default schema).
+            # table_names = connection.catalog.get_table_names(schema="Extract")
+            # for table in table_names:
+            #     table_definition = connection.catalog.get_table_definition(name=table)
+            #     print(f"Table {table.name} has qualified name: {table}")
+            #     for column in table_definition.columns:
+            #         print(f"Column {column.name} has type={column.type} and nullability={column.nullability}")
+            #     print("")
             table_name = TableName("Extract", "Extract")
-            # XXX override for now
-            functional_ordered_column = "DN_DATE"
             rows_affected = connection.execute_command(command=f'DELETE FROM {table_name} WHERE "{functional_ordered_column}" >= {column_value}')
             return rows_affected
+
+
+def refresh_datasource(server, project, ds):
+    for datasource in tsc.Pager(server.datasources):
+        logging.debug("{0} ({1})".format(datasource.name, datasource.project_name))
+        if datasource.name == ds and datasource.project_name == project:
+            logging.info("{0}: {1}".format(datasource.name, datasource.project_name, datasource.id))
+            ds_file = server.datasources.download(datasource.id, include_extract=False)
+            tds = Datasource.from_file(ds_file)
+            if not tds.has_extract():
+                logging.error(f"datasource {ds} does not contain an extract")
+                return
+            if tds.extract.connection.dbclass != 'hyper':
+                logging.error(f"datasource {ds} is not based on a hyper extract")
+                return
+            database = tds.connections[0].dbname
+            # TODO: determine update_value, last seen value as retrieved from a reference table???
+            functional_ordered_column_value_min, functional_ordered_column_value_previous = get_database_min_functional_ordered_column_value(database, ds, update_value)
+            hyper_file = tds.extract.connection[0].dbname
+            rows_affected = hyper_prepare(hyper_file, config['datasources'][ds]['functional_ordered_column'],
+                                          functional_ordered_column_value_min)
+            logging.info(f"datasource {ds} with hyper file {hyper_file}: {rows_affected} rows were deleted")
+            tds.extract.refresh.refresh_events[-1].increment_value = functional_ordered_column_value_previous
+            tds.save_as(ds_file)
+            credentials = ConnectionCredentials(config['databases'][database]['args']['user'], config['databases'][database]['args']['password'], embed=True)
+            new_ds = tsc.DatasourceItem(project.id)
+            new_ds.name = ds
+            server.datasources.publish(new_ds, ds, mode=tsc.Server.PublishMode.Overwrite, connection_credentials=credentials)
+            try:
+                job = (datasource, server.datasources.refresh(datasource))
+            except ServerResponseError as e:
+                logging.error("exception while processing [{1}]: {0}".format(str(e), ds))
+                return None
+            return job
+
+
+def wait_for_jobs(server, jobs, timeout, frequency):
+    signal.alarm(timeout)
+    n = 0
+    while n < len(jobs):
+        time.sleep(frequency)
+        running_jobs = server.jobs
+        if running_jobs is None:
+            logging.debug("no jobs returned, assuming all jobs are done")
+            n = len(jobs)
+        else:
+            n = 0
+            for id in jobs.keys():
+                logging.debug("checking job id: {0}".format(id))
+                job = running_jobs.get(jobs[id][1].id)
+                if job is None:
+                    n += 1  # assume job is done
+                else:
+                    logging.debug("checking job for datasource: {0}, finish code: {1}".format(jobs[id][0].name,
+                                                                                              job.finish_code))
+                    if job.finish_code == '1':
+                        raise RuntimeError("refresh job exited unexpectedly for datasourse {}".format(jobs[id][0].name))
+                    if job.finish_code == '0':
+                        n += 1
+    logging.debug(f"all datasources have been refreshed")
+    signal.alarm(0)
 
 
 def main():
@@ -59,9 +142,9 @@ def main():
                         default=None)
     parser.add_argument('--project', '-P', required=True, help='project to create extracts for', default=None)
     parser.add_argument('--site', '-S', default=None)
-    parser.add_argument('-w', action='store_true', help='wait for the refresh to finish', default=None)
-    parser.add_argument('-m', type=int, help='max wait time in seconds', default=0)
-    parser.add_argument('-f', type=int, help='check frequency in seconds', default=10)
+    parser.add_argument('--wait', '-w', action='store_true', help='wait for the refresh to finish', default=None)
+    parser.add_argument('--timeout', '-t', type=int, help='max wait time in seconds', default=0)
+    parser.add_argument('--frequency', '-f', type=int, help='check frequency in seconds', default=10)
 
     parser.add_argument('--logging-level', '-l', choices=['debug', 'info', 'error'], default='error',
                         help='desired logging level (set to error by default)')
@@ -82,67 +165,22 @@ def main():
     with open(args.config, 'r') as f:
         config = json.load(f)
 
-    with database_connect('HANSANDERS_WD') as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(f"""select min({config['datasources']['Visits']['functional_ordered_column']}) 
-                                from {config['datasources']['Visits']['reference_table']} 
-                                where {config['parameters']['update_datetime_column']} > current_date - 100""")
-            result_rows = cursor.fetchall()
-            functional_ordered_column_type = cursor.description[0][1]
-            functional_ordered_column_value = result_rows[0][0]
-            if functional_ordered_column_type in set([db.DATE, db.TIME, db.DATETIME, db.STRING, db.TEXT]):
-                functional_ordered_column_value = f"'{functional_ordered_column_value}'"
-
-
-    rows_affected = hyper_prepare("Store visits.hyper", config['datasources']['Visits']['extract_table'],
-                  config['datasources']['Visits']['functional_ordered_column'],
-                  functional_ordered_column_value)
-
     signal.signal(signal.SIGALRM, handler)
 
-    tableau_auth = TSC.TableauAuth(args.username, password, args.site)
+    # authenticate with the Tableau server
+    tableau_auth = tsc.TableauAuth(args.username, password, args.site)
     # use api version corresponding with server version
-    server = TSC.Server(args.server, use_server_version=True)
+    server = tsc.Server(args.server, use_server_version=True)
 
-    jobs = dict()
     with server.auth.sign_in(tableau_auth):
-        for ds in TSC.Pager(server.datasources):
-            logging.debug("{0} ({1})".format(ds.name, ds.project_name))
-            if ds.name in args.datasource and ds.project_name == args.project:
-                logging.info("{0}: {1}".format(ds.name, ds.project_name, ds.id))
-                ds_file = server.datasources.download(ds.id, include_extract=False)
-                tds = Datasource.from_file(ds_file)
-                pass
-                try:
-                    jobs[ds.id] = (ds, server.datasources.refresh(ds))
-                except ServerResponseError as e:
-                    logging.error("exception while processing [{1}]: {0}".format(str(e), ds.name))
+        jobs = dict()
+
+        for ds in args.datasource:
+            (datasource, job_id) = refresh_datasource(server, args.project, ds)
+            jobs[datasource.id] = (datasource, job_id)
+
         if args.w:
-            signal.alarm(args.m)
-            n = 0
-            while n < len(jobs):
-                time.sleep(args.f)
-                running_jobs = server.jobs
-                if running_jobs is None:
-                    logging.debug("no jobs returned, assuming all jobs are done")
-                    n = len(jobs)
-                else:
-                    n = 0
-                    for id in jobs.keys():
-                        logging.debug("checking job id: {0}".format(id))
-                        job = running_jobs.get(jobs[id][1].id)
-                        if job is None:
-                            n += 1  # assume job is done
-                        else:
-                            logging.debug("checking job for datasource: {0}, finish code: {1}".format(jobs[id][0].name,
-                                                                                                      job.finish_code))
-                            if job.finish_code == '1':
-                                raise RuntimeError(
-                                    "refresh job exited unexpectedly for datasourse {}".format(jobs[id][0].name))
-                            if job.finish_code == '0':
-                                n += 1
-            logging.debug("all jobs are finished")
-            signal.alarm(0)
+            wait_for_jobs(server, jobs, args.timeout, args.frequency)
 
 
 if __name__ == '__main__':
