@@ -15,6 +15,7 @@ from tableauserverclient import ServerResponseError, ConnectionCredentials
 
 # global for configuration
 config = dict()
+projects = dict()
 
 
 def handler(signum, frame):
@@ -69,11 +70,15 @@ def hyper_prepare(hyper_path, functional_ordered_column, column_value):
 
 
 def refresh_datasource(server, project, ds):
+    global projects
+
+    p = projects[project]
     for datasource in tsc.Pager(server.datasources):
         logging.debug("{0} ({1})".format(datasource.name, datasource.project_name))
         if datasource.name == ds and datasource.project_name == project:
             logging.info("{0}: {1}".format(datasource.name, datasource.project_name, datasource.id))
-            ds_file = server.datasources.download(datasource.id, include_extract=False)
+            # ds_file = server.datasources.download(datasource.id, include_extract=False)
+            ds_file = server.datasources.download(datasource.id, include_extract=True)
             tds = Datasource.from_file(ds_file)
             if not tds.has_extract():
                 logging.error(f"datasource {ds} does not contain an extract")
@@ -86,17 +91,19 @@ def refresh_datasource(server, project, ds):
                 return
             database = tds.connections[0].dbname
             # TODO: determine update_value, last seen value as retrieved from a reference table???
-            update_value = 'current_date -100'
-            functional_ordered_column_value_min, functional_ordered_column_value_previous = get_database_min_functional_ordered_column_value(database, ds, update_value)
+            # update_value = 'current_date -100'
+            # functional_ordered_column_value_min, functional_ordered_column_value_previous = get_database_min_functional_ordered_column_value(database, ds, update_value)
             hyper_file = tds.extract.connection.dbname
             # rows_affected = hyper_prepare(hyper_file, config['datasources'][ds]['functional_ordered_column'],
             #                               functional_ordered_column_value_min)
             # logging.info(f"datasource {ds} with hyper file {hyper_file}: {rows_affected} rows were deleted")
             # tds.extract.refresh.refresh_events[-1].increment_value = functional_ordered_column_value_previous
             tds.save_as(ds_file)
-            credentials = ConnectionCredentials(config['databases'][database]['args']['user'], config['databases'][database]['args']['password'], embed=True)
-            new_ds = tsc.DatasourceItem(project.id)
+            # credentials = ConnectionCredentials(config['databases'][database]['args']['user'], config['databases'][database]['args']['password'], embed=True)
+            credentials = ConnectionCredentials('postgres', 'k00ijman', embed=True)
+            new_ds = tsc.DatasourceItem(p.id)
             new_ds.name = ds
+            # server.version = '2.4'
             server.datasources.publish(new_ds, ds_file, mode=tsc.Server.PublishMode.Overwrite, connection_credentials=credentials)
             try:
                 job = (datasource, server.datasources.refresh(datasource))
@@ -126,17 +133,25 @@ def wait_for_jobs(server, jobs, timeout, frequency):
                     logging.debug("checking job for datasource: {0}, finish code: {1}".format(jobs[id][0].name,
                                                                                               job.finish_code))
                     if job.finish_code == '1':
-                        raise RuntimeError("refresh job exited unexpectedly for datasourse {}".format(jobs[id][0].name))
+                        raise RuntimeError("refresh job exited unexpectedly for datasource {}".format(jobs[id][0].name))
                     if job.finish_code == '0':
                         n += 1
     logging.debug(f"all datasources have been refreshed")
     signal.alarm(0)
 
 
+def get_projects(server):
+    projects = dict()
+    for p in tsc.Pager(server.projects):
+        projects[p.name] = p
+    return projects
+
+
 def main():
     # lees configuratie uit, met naam van update kolom, functionele ID, datasource naam, vorige_update_datum
     # lees database config uit bestand? of gewoon ook op de command-line? jdbc url, user, passwd
     global config
+    global projects
 
     parser = argparse.ArgumentParser(description='perform incremental refresh on datasources',
                                      fromfile_prefix_chars='@')
@@ -178,13 +193,16 @@ def main():
     server = tsc.Server(args.server, use_server_version=True)
 
     with server.auth.sign_in(tableau_auth):
+
+        projects = get_projects(server)
+
         jobs = dict()
 
         for ds in args.datasource:
-            (datasource, job_id) = refresh_datasource(server, args.project, ds)
-            jobs[datasource.id] = (datasource, job_id)
+            (datasource, job) = refresh_datasource(server, args.project, ds)
+            jobs[job.id] = (datasource, job)
 
-        if args.w:
+        if args.wait:
             wait_for_jobs(server, jobs, args.timeout, args.frequency)
 
 
