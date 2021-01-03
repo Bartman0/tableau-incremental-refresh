@@ -99,8 +99,7 @@ def refresh_datasource(server, project, ds):
             # logging.info(f"datasource {ds} with hyper file {hyper_file}: {rows_affected} rows were deleted")
             # tds.extract.refresh.refresh_events[-1].increment_value = functional_ordered_column_value_previous
             tds.save_as(ds_file)
-            # credentials = ConnectionCredentials(config['databases'][database]['args']['user'], config['databases'][database]['args']['password'], embed=True)
-            credentials = ConnectionCredentials('postgres', 'k00ijman', embed=True)
+            credentials = ConnectionCredentials(config['databases'][database]['args']['user'], config['databases'][database]['args']['password'], embed=True)
             new_ds = tsc.DatasourceItem(p.id)
             new_ds.name = ds
             # server.version = '2.4'
