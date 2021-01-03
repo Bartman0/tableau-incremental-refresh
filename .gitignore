@@ -137,3 +137,5 @@ dmypy.json
 
 # do not push configuration files
 config.json
+
+drivers/
