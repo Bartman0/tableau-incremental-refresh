@@ -13,7 +13,9 @@ from tableaudocumentapi import Datasource
 from tableauhyperapi import HyperProcess, Telemetry, Connection, TableName
 from tableauserverclient import ServerResponseError, ConnectionCredentials
 
-# global for configuration
+# globals
+WORK_DIR = "work"
+
 config = dict()
 projects = dict()
 
@@ -77,8 +79,7 @@ def refresh_datasource(server, project, ds):
         logging.debug("{0} ({1})".format(datasource.name, datasource.project_name))
         if datasource.name == ds and datasource.project_name == project:
             logging.info("{0}: {1}".format(datasource.name, datasource.project_name, datasource.id))
-            # ds_file = server.datasources.download(datasource.id, include_extract=False)
-            ds_file = server.datasources.download(datasource.id, include_extract=True)
+            ds_file = server.datasources.download(datasource.id, filepath=WORK_DIR, include_extract=False)
             tds = Datasource.from_file(ds_file)
             if not tds.has_extract():
                 logging.error(f"datasource {ds} does not contain an extract")
