@@ -1,4 +1,7 @@
 # tableau-incremental-refresh
 Project that enables you to perform realistic incremental refreshes in a Tableau Server environment with databases as source system. It uses the Tableau Hyper and Server Client API's to accomplish this. And a [modified/forked Tableau document API](https://github.com/Bartman0/document-api-python/tree/extract).
 
+The main goal of this code is to implemenent incremental refreshes within Tableau taking updates of existing data into consideration. The current incremental refresh of Tableau data sources is very limited: it only supports cases where only new data is added to the data(base) underlying a data source, but this is rarely the case in data warehouse. In all data warehouse models that I know of, data is also updated frequently to reflect the latest attribute and measure values. And then the standard incremental refresh mode does not suffice. In those cases only one option remains: full refresh of data sources.
+If your data warehouse is updated daily, and only data is added and updated for the last couple of days, it is very expensive to perform a full refresh of the data source for the whole history which can go up to several years of data. Just because a very limited amount of data is updated instead of merely added to the system.
+
 Of course, more documentation is needed to get this functionality implemented in your situation. That will follow later when this component is fully developed and tested more rigorously.
