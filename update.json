@@ -1,0 +1,16 @@
+{
+  "datasources": {
+    "Sales": {
+      "last_update_value": ""
+    },
+    "Visits": {
+      "last_update_value": ""
+    },
+    "Visits incremental": {
+      "last_update_value": "'2021-01-01'"
+    },
+    "test_data": {
+      "last_update_value": ""
+    }
+  }
+}
