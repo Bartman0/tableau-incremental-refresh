@@ -8,6 +8,7 @@ import sys
 import time
 from datetime import time
 from pathlib import Path
+import zipfile
 
 import jaydebeapi as db
 import tableauserverclient as tsc
@@ -93,7 +94,10 @@ def datasource_prepare(server, project, ds):
         logging.debug("{0} ({1})".format(datasource.name, datasource.project_name))
         if datasource.name == ds and datasource.project_name == project:
             logging.info("{0}: {1}".format(datasource.name, datasource.project_name, datasource.id))
-            ds_file = server.datasources.download(datasource.id, filepath=WORK_DIR, include_extract=False)
+            ds_file = server.datasources.download(datasource.id, filepath=WORK_DIR, include_extract=True)
+            if zipfile.is_zipfile(ds_file):
+                with zipfile.ZipFile(ds_file) as zf:
+                    zf.extractall()
             tds = Datasource.from_file(ds_file)
             if not tds.has_extract():
                 logging.error(f"datasource {ds} does not contain an extract")
@@ -136,22 +140,12 @@ def get_schedules(server, project, ds):
     schedule_to_get = None
     for s in tsc.Pager(server.schedules):
         logging.info(f"schedule id: {s.id}, schedule name: {s.name}")
-        if s.name == "Saturday night":
+        if s.name == "Test2 RKO":
             schedule_to_get = s
-    interval_item = HourlyInterval(start_time=time(10, 0), end_time=time(10, 15), interval_value=1)
-    s.name = "Saturday night RKO"
-    # schedule_item = ScheduleItem("Test2 RKO", priority=10,
-    #                         schedule_type=ScheduleItem.Type.Extract,
-    #                         execution_order=ScheduleItem.ExecutionOrder.Serial,
-    #                         interval_item=interval_item)
-    # schedule = server.schedules.create(schedule_item)
-    for datasource in tsc.Pager(server.datasources):
-        logging.debug("{0} ({1})".format(datasource.name, datasource.project_name))
-        if datasource.name == ds and datasource.project_name == project:
-            logging.info("{0}: {1}".format(datasource.name, datasource.project_name, datasource.id))
-            #ds_file = server.datasources.download(datasource.id, filepath=WORK_DIR, include_extract=False)
+    interval_item = HourlyInterval(start_time=time(23, 45), end_time=time(23, 00), interval_value=1)
     # this works, but you cannot set the refresh type
     #server.schedules.add_to_schedule(schedule_id=schedule.id, datasource=datasource)
+    schedule_to_get.interval_item = interval_item
     server.schedules.update(schedule_item=schedule_to_get)
     pass
 
