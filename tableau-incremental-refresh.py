@@ -14,9 +14,11 @@ import jaydebeapi as db
 import tableauserverclient as tsc
 from tableaudocumentapi import Datasource
 from tableauhyperapi import HyperProcess, Telemetry, Connection, TableName
-from tableauserverclient import ConnectionCredentials, ScheduleItem, HourlyInterval
+from tableauserverclient import ConnectionCredentials, HourlyInterval
 
 # globals
+from utils import datasource_quote_date
+
 WORK_DIR = "work"
 
 config = dict()
@@ -120,7 +122,7 @@ def datasource_prepare(server, project, ds):
             rows_affected = hyper_prepare(hyper_file, config['datasources'][ds]['functional_ordered_column'],
                                           functional_ordered_column_value_min)
             logging.info(f"datasource {ds} with hyper file {hyper_file}: {rows_affected} rows were deleted")
-            tds.extract.refresh.refresh_events[-1].increment_value = functional_ordered_column_value_previous
+            tds.extract.refresh.refresh_events[-1].increment_value = datasource_quote_date(functional_ordered_column_value_previous)
             tds.save_as(ds_file)
             credentials = ConnectionCredentials(config['databases'][database]['args']['user'], config['databases'][database]['args']['password'], embed=True)
             new_ds = tsc.DatasourceItem(p.id)
