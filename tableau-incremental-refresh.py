@@ -144,7 +144,7 @@ def get_schedules(server, project, ds):
         logging.info(f"schedule id: {s.id}, schedule name: {s.name}")
         if s.name == "Test2 RKO":
             schedule_to_get = s
-    interval_item = HourlyInterval(start_time=time(23, 45), end_time=time(23, 00), interval_value=1)
+    interval_item = HourlyInterval(start_time=time(23, 00), end_time=time(23, 15), interval_value=1)
     # this works, but you cannot set the refresh type
     #server.schedules.add_to_schedule(schedule_id=schedule.id, datasource=datasource)
     schedule_to_get.interval_item = interval_item
@@ -220,14 +220,14 @@ def main():
 
     # Set logging level based on user input, or error by default
     logging_level = getattr(logging, args.logging_level.upper())
-    logging.basicConfig(level=logging_level)
+    logging.basicConfig(level=logging_level, format='%(asctime)s %(levelname)s: %(message)s')
 
     with open(args.config, 'r') as f:
         config = json.load(f)
     with open(config['parameters']['update_values'], 'r') as f:
         updates = json.load(f)
 
-    signal.signal(signal.SIGALRM, handler)
+    #signal.signal(signal.SIGALRM, handler)
 
     # authenticate with the Tableau server
     tableau_auth = tsc.TableauAuth(args.username, password, args.site)
