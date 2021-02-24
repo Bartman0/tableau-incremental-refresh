@@ -2,19 +2,22 @@ import argparse
 import getpass
 import json
 import logging
+import math
 import os
 import signal
 import sys
 import time
 from datetime import time
+import datetime as dt
 from pathlib import Path
 import zipfile
+import shutil
 
 import jaydebeapi as db
 import tableauserverclient as tsc
 from tableaudocumentapi import Datasource
 from tableauhyperapi import HyperProcess, Telemetry, Connection, TableName
-from tableauserverclient import ConnectionCredentials, HourlyInterval
+from tableauserverclient import ConnectionCredentials, DailyInterval, HourlyInterval
 
 # globals
 from utils import datasource_quote_date
@@ -45,14 +48,18 @@ def get_database_values(database, datasource, update_value):
     """
     with database_connect(database) as connection:
         with connection.cursor() as cursor:
+            # TODO bepaal alleen min(functional_ordered_column
             cursor.execute(f"""select distinct {config['datasources'][datasource]['functional_ordered_column']} 
                                 from {config['datasources'][datasource]['reference_table']} 
                                 where {config['parameters']['update_datetime_column']} > {update_value}
                                 order by {config['datasources'][datasource]['functional_ordered_column']}
                                 limit 2""")
             result_rows = cursor.fetchall()
+            if len(result_rows) < 1:
+                return (None, None, None, None)
             functional_ordered_column_type = cursor.description[0][1]
             functional_ordered_column_value_min = result_rows[0][0]
+            # TODO verwijder functional_ordered_column_value_previous bepaling
             if len(result_rows) > 1:
                 functional_ordered_column_value_previous = result_rows[1][0]
             else:
@@ -67,7 +74,7 @@ def get_database_values(database, datasource, update_value):
                                 from {config['datasources'][datasource]['reference_table']}""")
             result_rows = cursor.fetchall()
             last_update_value = result_rows[0][0]
-    return functional_ordered_column_value_min, functional_ordered_column_value_previous, last_update_value
+    return functional_ordered_column_value_min, functional_ordered_column_value_previous, last_update_value, functional_ordered_column_type
 
 
 def hyper_prepare(hyper_path, functional_ordered_column, column_value):
@@ -75,14 +82,17 @@ def hyper_prepare(hyper_path, functional_ordered_column, column_value):
      the hyper file is cleaned from the latest set of data by deleting all data with the given column value or greater values
      """
     path_to_database = Path(hyper_path).expanduser().resolve()
+    logging.info(f"full path to hyper file: {path_to_database}")
     with HyperProcess(telemetry=Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU, user_agent=os.path.basename(__file__)) as hyper:
         with Connection(endpoint=hyper.endpoint, database=path_to_database) as connection:
             table_name = TableName("Extract", "Extract")
             rows_affected = connection.execute_command(command=f'DELETE FROM {table_name} WHERE "{functional_ordered_column}" >= {column_value}')
+            # TODO bepaal max(functional_ordered_column) uit tabel na uitvoeren van DELETE, dat wordt dan de nieuwe functional_ordered_column_previous
+            connection.close()
             return rows_affected
 
 
-def datasource_prepare(server, project, ds):
+def datasource_prepare(server, project, ds, hyper_dir, download_dir):
     """Function that prepares the data source on the given server in the given project:
     - get the functional ordered column and the last update value of the reference table
     - clean up the hyper extract by deleting to be refreshed data
@@ -96,7 +106,10 @@ def datasource_prepare(server, project, ds):
         logging.debug("{0} ({1})".format(datasource.name, datasource.project_name))
         if datasource.name == ds and datasource.project_name == project:
             logging.info("{0}: {1}".format(datasource.name, datasource.project_name, datasource.id))
-            ds_file = server.datasources.download(datasource.id, filepath=WORK_DIR, include_extract=True)
+            if hyper_dir is None:
+                ds_file = server.datasources.download(datasource.id, filepath=WORK_DIR, include_extract=True)
+            else:
+                ds_file = server.datasources.download(datasource.id, filepath=WORK_DIR, include_extract=False)
             if zipfile.is_zipfile(ds_file):
                 with zipfile.ZipFile(ds_file) as zf:
                     zf.extractall()
@@ -117,18 +130,39 @@ def datasource_prepare(server, project, ds):
                 logging.error(f"datasource {ds} does not have a last update value set, please provide one")
                 return
 
-            functional_ordered_column_value_min, functional_ordered_column_value_previous, last_update_value = get_database_values(database, ds, update_value)
+            functional_ordered_column_value_min, functional_ordered_column_value_previous, last_update_value, functional_ordered_column_type = get_database_values(database, ds, update_value)
+            if functional_ordered_column_value_min is None:
+                logging.info(f"no data to be processed for {datasource}")
+                continue
             hyper_file = tds.extract.connection.dbname
+            new_dbname = None
+            if hyper_dir is not None:
+                hyper_file = os.path.join(os.pathsep, hyper_dir, tds.extract.connection.dbname)
+                work_hyper_file = os.path.join(os.pathsep, os.getcwd(), download_dir, tds.extract.connection.dbname)
+                new_dbname = download_dir + "/" + tds.extract.connection.dbname
+                logging.info(f"work hyper file: {work_hyper_file}")
+                target_dir = f"{os.path.dirname(work_hyper_file)}"
+                if not os.path.exists(target_dir):
+                    os.makedirs(target_dir)
+                shutil.copy2(hyper_file, target_dir)
+                logging.info(f"hyper file copied to: {target_dir}")
+                hyper_file = work_hyper_file
+            logging.info(f"hyper file located at: {hyper_file}")
             rows_affected = hyper_prepare(hyper_file, config['datasources'][ds]['functional_ordered_column'],
                                           functional_ordered_column_value_min)
             logging.info(f"datasource {ds} with hyper file {hyper_file}: {rows_affected} rows were deleted")
             tds.extract.refresh.refresh_events[-1].increment_value = datasource_quote_date(functional_ordered_column_value_previous)
+            if new_dbname is not None:
+                tds.extract.connection.dbname = new_dbname
             tds.save_as(ds_file)
             credentials = ConnectionCredentials(config['databases'][database]['args']['user'], config['databases'][database]['args']['password'], embed=True)
             new_ds = tsc.DatasourceItem(p.id)
             new_ds.name = ds
             server.datasources.publish(new_ds, ds_file, mode=tsc.Server.PublishMode.Overwrite, connection_credentials=credentials)
-            updates['datasources'][ds]['last_update_value'] = last_update_value
+            if functional_ordered_column_type in {db.DATE, db.TIME, db.DATETIME, db.STRING, db.TEXT}:
+                updates['datasources'][ds]['last_update_value'] = f"'{last_update_value}'"
+            else:
+                updates['datasources'][ds]['last_update_value'] = last_update_value
             # incremental refreshes can not be done yet through the API   |-(
             # try:
             #     job = (datasource, server.datasources.refresh(datasource))
@@ -138,18 +172,20 @@ def datasource_prepare(server, project, ds):
             # return job
 
 
-def get_schedules(server, project, ds):
-    schedule_to_get = None
+def update_incremental_schedule(server, project, ds):
+    schedule_to_update = None
     for s in tsc.Pager(server.schedules):
         logging.info(f"schedule id: {s.id}, schedule name: {s.name}")
-        if s.name == "Test2 RKO":
-            schedule_to_get = s
-    interval_item = HourlyInterval(start_time=time(23, 00), end_time=time(23, 15), interval_value=1)
-    # this works, but you cannot set the refresh type
-    #server.schedules.add_to_schedule(schedule_id=schedule.id, datasource=datasource)
-    schedule_to_get.interval_item = interval_item
-    server.schedules.update(schedule_item=schedule_to_get)
-    pass
+        if s.name == ds:
+            schedule_to_update = s
+    if schedule_to_update is None:
+        logging.error(f"can not find a matching schedule to update: {ds}")
+    else:
+        now_plus_15 = dt.datetime.now() + dt.timedelta(minutes=15)
+        # round to the next slot of 15 minutes
+        interval_item = DailyInterval(start_time=time(now_plus_15.hour, math.floor(now_plus_15.minute/15)*15))
+        schedule_to_update.interval_item = interval_item
+        server.schedules.update(schedule_item=schedule_to_update)
 
 
 def wait_for_jobs(server, jobs, timeout, frequency):
@@ -205,6 +241,8 @@ def main():
     parser.add_argument('--wait', '-w', action='store_true', help='wait for the refresh to finish', default=None)
     parser.add_argument('--timeout', '-t', type=int, help='max wait time in seconds', default=0)
     parser.add_argument('--frequency', '-f', type=int, help='check frequency in seconds', default=10)
+    parser.add_argument('--hyper', '-H', required=False, help='local hyper directory (when executed on server)')
+    parser.add_argument('--download', '-D', required=False, help='local download directory for hyper extracts')
 
     parser.add_argument('--logging-level', '-l', choices=['debug', 'info', 'error'], default='error',
                         help='desired logging level (set to error by default)')
@@ -239,8 +277,8 @@ def main():
 
         jobs = dict()
         for ds in args.datasource:
-            get_schedules(server, args.project, ds)
-            datasource_prepare(server, args.project, ds)
+            datasource_prepare(server, args.project, ds, args.hyper, args.download)
+            update_incremental_schedule(server, args.project, ds)
             # jobs[job.id] = (datasource, job)
 
         if args.wait:
