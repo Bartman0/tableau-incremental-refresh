@@ -154,7 +154,7 @@ def datasource_prepare(server, project, ds, hyper_dir, download_dir):
                                                                         config['datasources'][ds]['functional_ordered_column'],
                                                                         functional_ordered_column_value_min)
             logging.info(f"datasource {ds} with hyper file {hyper_file}: {rows_affected} rows were deleted")
-            # set the previous value of the functional ordered column in the extract events so the incremental refresh has the right continuation point
+            # set the previous value of the functional ordered column in the extract events so the incremental refresh gets the valid continuation point
             tds.extract.refresh.refresh_events[-1].increment_value = datasource_quote_date(functional_ordered_column_value_previous)
             if new_dbname is not None:
                 tds.extract.connection.dbname = new_dbname
