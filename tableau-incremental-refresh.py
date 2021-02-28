@@ -253,8 +253,8 @@ def main():
             datasource_prepare(server, args.project, ds, args.hyper, args.download)
             update_incremental_schedule(server, args.project, ds)
 
-    with open(config['parameters']['update_values'], 'w') as updates_file:
-        json.dump(updates, updates_file, indent=2)
+            with open(config['parameters']['update_values'], 'w') as updates_file:
+                json.dump(updates, updates_file, indent=2)
 
 
 if __name__ == '__main__':
