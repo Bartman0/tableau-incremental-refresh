@@ -44,6 +44,7 @@ def get_database_values(database, datasource, update_value):
     - the minimum value of the functional ordered column after the last seen update value
     - the last update value as already available in the database reference table
     """
+    # TODO: move out all usages of the global dicts like 'config' and replace them with function parameters
     with database_connect(database) as connection:
         with connection.cursor() as cursor:
             # get the minimun value of the functional ordered column that can be seen after the last update value
@@ -77,11 +78,13 @@ def hyper_prepare(hyper_path, functional_ordered_column, column_value):
         table_name = TableName("Extract", "Extract")
         with Connection(endpoint=hyper.endpoint, database=path_to_database) as connection:
             # delete all rows where the functional ordered column is a candidate for updating
+            logging.info(f"delete data from {table_name} where {functional_ordered_column} >= {column_value}")
             rows_affected = connection.execute_command(command=f'DELETE FROM {table_name} WHERE "{functional_ordered_column}" >= {column_value}')
             # retrieve the remaining max value of the functional ordered column
             with connection.execute_query(query=f'SELECT max("{functional_ordered_column}") FROM {table_name}') as result:
                 rows = list(result)
                 functional_ordered_column_previous = rows[0][0]
+            logging.info(f"previous functional ordered column value: {functional_ordered_column_previous}")
     return rows_affected, functional_ordered_column_previous
 
 
@@ -194,6 +197,7 @@ def update_incremental_schedule(server, project, ds):
         interval_item = DailyInterval(start_time=time(now_plus_15.hour, math.floor(now_plus_15.minute/15)*15))
         schedule_to_update.interval_item = interval_item
         # update the schedule
+        logging.info(f"updated schedule {schedule_to_update.name} with {interval_item}")
         server.schedules.update(schedule_item=schedule_to_update)
 
 
