@@ -21,6 +21,15 @@ This component fixes that: it uses the definition of specified data sources to p
 By cleaning the Hyper extract file from to-be-updated data and updating the incremental refresh information in the data source, the regular incremental refresh as performed by Tableau server can be applied succesfully again.
 This way, data source refreshes that could take hours for large data sources, data wise of history wise, can be performed within minutes.
 
+## Platforms
+
+Since it is built in Python, this utility should run everywhere where Python and the required packages are supported.
+However, I have seen that running it on macOS will result in strange and inconsistent outcomes. I logged an incident for that, and also 
+tried involving the Tableau community. I will update this information if I receive some sort of resolution for it.
+
+I know this utility to work on Windows.
+
+
 ## Run options
 
 Basically, see the output of a run with --help as argument:
