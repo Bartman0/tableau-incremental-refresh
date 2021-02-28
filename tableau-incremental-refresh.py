@@ -136,6 +136,7 @@ def datasource_prepare(server, project, ds, hyper_dir, download_dir):
             new_dbname = None
 
             # if we got a hyper_dir, try getting the hyper file locally, i.e. copy it from that directory
+            # BTW, this works technically, but the publish will result in a Bad Request error by the server later on
             if hyper_dir is not None:
                 hyper_file = os.path.join(os.pathsep, hyper_dir, tds.extract.connection.dbname)
                 work_hyper_file = os.path.join(os.pathsep, os.getcwd(), download_dir, tds.extract.connection.dbname)
@@ -153,7 +154,7 @@ def datasource_prepare(server, project, ds, hyper_dir, download_dir):
             rows_affected, functional_ordered_column_value_previous = hyper_prepare(hyper_file,
                                                                         config['datasources'][ds]['functional_ordered_column'],
                                                                         functional_ordered_column_value_min)
-            logging.info(f"datasource {ds} with hyper file {hyper_file}: {rows_affected} rows were deleted")
+            logging.info(f"datasource {ds} with hyper file {hyper_file}: {rows_affected} rows were deleted, previous value = {functional_ordered_column_value_previous} for functional ordered column")
             # if the previous value is None, no data was left anymore, so set the previous value to the minimum applicable value
             value_previous = datasource_quote_date(functional_ordered_column_value_previous)
             if value_previous is None:
