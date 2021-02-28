@@ -155,7 +155,10 @@ def datasource_prepare(server, project, ds, hyper_dir, download_dir):
                                                                         functional_ordered_column_value_min)
             logging.info(f"datasource {ds} with hyper file {hyper_file}: {rows_affected} rows were deleted")
             # if the previous value is None, no data was left anymore, so set the previous value to the minimum applicable value
-            functional_ordered_column_value_previous = functional_ordered_column_value_previous or functional_ordered_column_value_min
+            value_previous = datasource_quote_date(functional_ordered_column_value_previous)
+            if value_previous is None:
+                logging.error("something weird is going on: the incremental refresh deleted all base data, consider running a new full refresh")
+                return
             # set the previous value of the functional ordered column in the extract events so the incremental refresh gets the valid continuation point
             tds.extract.refresh.refresh_events[-1].increment_value = datasource_quote_date(functional_ordered_column_value_previous)
             if new_dbname is not None:

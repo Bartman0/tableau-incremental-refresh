@@ -1,5 +1,11 @@
 # tableau-incremental-refresh
-Project that enables you to perform realistic incremental refreshes in a Tableau Server environment with databases as source system. It uses the Tableau Hyper, Document and Server Client API's to accomplish this. Plus a [modified/forked Tableau document API](https://github.com/Bartman0/document-api-python/tree/extract) by me.
+Project that enables you to perform realistic incremental refreshes in a Tableau Server environment with databases as source system. It uses the Tableau Hyper, Document and Server Client API's to accomplish this. 
+The following API's have been modified/forked by me to enhance their functionality as needed by this utility:
+* [modified/forked Tableau document API](https://github.com/Bartman0/document-api-python)
+* [modified/forked Tableau server client API](https://github.com/Bartman0/server-client-python)
+
+Side note: I will try getting my modifications merged back into the main repo's. But for now, you have to use these modifications
+through local installs.
 
 The main goal of this code is to implemenent incremental refreshes within Tableau taking updates of existing data into consideration. The current incremental refresh of Tableau data sources is very limited: it only supports cases where only new data is added to the data(base) underlying a data source, but this is rarely the case in data warehouses. In all data warehouses that I know of, data is also updated frequently to reflect the latest attribute and measure values. And then the standard Tableau incremental refresh mode can not be applied. Only one option remains: a full refresh of data sources.
 If your data warehouse is updated daily, and only data is added and updated for the last couple of days, it is very expensive to perform a full refresh of the data source for the whole history which can go up to several years of data. Just because a very limited amount of data is updated instead of merely added to the system.
@@ -19,7 +25,7 @@ This way, data source refreshes that could take hours for large data sources, da
 
 Basically, see the output of a run with --help as argument:
 
-```shell
+```text
 usage: tableau-incremental-refresh.py [-h] --config CONFIG --server SERVER
                                       --username USERNAME -p P --project
                                       PROJECT [--site SITE]
