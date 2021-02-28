@@ -25,9 +25,25 @@ This way, data source refreshes that could take hours for large data sources, da
 
 Since it is built in Python, this utility should run everywhere where Python and the required packages are supported.
 However, I have seen that running it on macOS will result in strange and inconsistent outcomes. I logged an incident for that, and also 
-tried involving the Tableau community. I will update this information if I receive some sort of resolution for it.
+tried involving the Tableau community ([problem using Hyper API](https://community.tableau.com/s/question/0D54T00000VB92SSAT/does-anybody-understand-this-hyper-database-behavior)). 
+I will update this information if I receive some sort of resolution for it.
 
 I know this utility to work on Windows.
+
+
+## Benefits
+
+The main benefit of this utility is that you only need to refresh updated/new data and you do not have to do
+a complete refresh everytime of your datasources.
+But please keep in mind, it will still take some time to do the refresh. The bottlenecks in the process are in two places:
+- the utility needs to download the datasource including the full extract data
+- the utility needs to publish the datasource again with the modified/prepared extract data
+
+These download and upload phases may still run for minutes if the data extracts are big, for example multiple gigabytes.
+There is no easy fix for that besides running fast computers and networks.
+
+It would help if we could modify the hyper file on the Tableau server directly. That requires Tableau to open up that
+possibility in their API's somehow.
 
 
 ## Run options
@@ -79,11 +95,12 @@ optional arguments:
 The program relies on JDBC, and therefore the **jaydebeapi** package to connect to databases. Also see the requirements.txt file.
 
 Each datasource that needs to be refreshed incrementally must have the following characteristics:
+* it must be a datasource that extracts data with a single base table (i.e. one table extract)
 * it must be accompanied by a schedule with the same name
 * it must be registered herein with an incremental refresh mode 
 * it must have had a full refresh
 
-These first two requirements may sound weird, but this program uses a trick to refresh a datasource incrementally: it looks
+The two requirements involving the schedule may sound weird, but this program uses a trick to refresh a datasource incrementally: it looks
 for a schedule with the same name, adapts its scheduling time, and have that schedule do the actual work of
 incrementally refreshing the datasource (after the data has been set up correctly in a republished hyper extract). The starting time 
 of that schedule is the next 15 minute block increment after the current wall time (only quarters of an hour can be specified in the scheduling times).
