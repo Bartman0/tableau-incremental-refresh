@@ -5,7 +5,6 @@ import json
 import logging
 import math
 import os
-import shutil
 import time
 import zipfile
 from datetime import time
@@ -14,7 +13,7 @@ from pathlib import Path
 import jaydebeapi as db
 import tableauserverclient as tsc
 from tableaudocumentapi import Datasource
-from tableauhyperapi import HyperProcess, Telemetry, Connection, TableName
+from tableauhyperapi import HyperProcess, Telemetry, Connection, TableName, Catalog
 from tableauserverclient import ConnectionCredentials, DailyInterval
 
 from utils import datasource_quote_date
@@ -27,11 +26,6 @@ updates = dict()
 projects = dict()
 
 
-def handler(signum, frame):
-    """Handler for the alarm timeout"""
-    raise RuntimeError("timeout waiting for jobs to finish")
-
-
 def database_connect(name):
     """Function that opens a database connection using the configuration based on the database name as input"""
     database = config['databases'][name]
@@ -39,33 +33,31 @@ def database_connect(name):
     return connection
 
 
-def get_database_values(database, datasource, update_value):
+def get_database_values(database, reference_table, functional_ordered_column, update_datetime_column, last_update_value):
     """Function that collects some important values from the database based on the configuration settings for the given database and datasource:
     - the minimum value of the functional ordered column after the last seen update value
     - the last update value as already available in the database reference table
     """
-    # TODO: move out all usages of the global dicts like 'config' and replace them with function parameters
     with database_connect(database) as connection:
         with connection.cursor() as cursor:
             # get the minimun value of the functional ordered column that can be seen after the last update value
-            cursor.execute(f"""select min({config['datasources'][datasource]['functional_ordered_column']}) 
-                                from {config['datasources'][datasource]['reference_table']} 
-                                where {config['parameters']['update_datetime_column']} > {update_value}
-                                """)
+            cursor.execute(f"""select min({functional_ordered_column}) from {reference_table} 
+                                where {update_datetime_column} > {last_update_value}""")
             result_rows = cursor.fetchall()
-            if len(result_rows) < 1:
+            if len(result_rows) < 1 or result_rows[0][0] is None:
                 return None, None, None
             functional_ordered_column_type = cursor.description[0][1]
             functional_ordered_column_value_min = result_rows[0][0]
             # dates, times and text must be quoted in the database query
-            if functional_ordered_column_type in {db.DATE, db.TIME, db.DATETIME, db.STRING, db.TEXT}:
-                functional_ordered_column_value_min = f"'{functional_ordered_column_value_min}'"
             # get the maximum update value that is currently present in the reference table
-            cursor.execute(f"""select max({config['parameters']['update_datetime_column']}) 
-                                from {config['datasources'][datasource]['reference_table']}""")
+            cursor.execute(f"""select max({update_datetime_column}) from {reference_table}""")
             result_rows = cursor.fetchall()
             last_update_value = result_rows[0][0]
-    return functional_ordered_column_value_min, last_update_value, functional_ordered_column_type
+            last_update_value_prepared = last_update_value
+            if functional_ordered_column_type in {db.DATE, db.TIME, db.DATETIME, db.STRING, db.TEXT}:
+                functional_ordered_column_value_min = f"'{functional_ordered_column_value_min}'"
+                last_update_value_prepared = f"'{last_update_value}'"
+    return functional_ordered_column_value_min, last_update_value, last_update_value_prepared
 
 
 def hyper_prepare(hyper_path, functional_ordered_column, column_value):
@@ -76,19 +68,23 @@ def hyper_prepare(hyper_path, functional_ordered_column, column_value):
     logging.info(f"full path to hyper file: {path_to_database}")
     with HyperProcess(telemetry=Telemetry.DO_NOT_SEND_USAGE_DATA_TO_TABLEAU, user_agent=os.path.basename(__file__)) as hyper:
         table_name = TableName("Extract", "Extract")
-        with Connection(endpoint=hyper.endpoint, database=path_to_database) as connection:
+        with Connection(endpoint=hyper.endpoint, database=path_to_database, parameters={"date_style": "YMD"}) as connection:
+            catalog = Catalog(connection)
+            table_definition = catalog.get_table_definition(table_name)
+            for c in table_definition.columns:
+                logging.debug(f"column definition: {c.name}, {c.type}")
             # delete all rows where the functional ordered column is a candidate for updating
             logging.info(f"delete data from {table_name} where {functional_ordered_column} >= {column_value}")
             rows_affected = connection.execute_command(command=f'DELETE FROM {table_name} WHERE "{functional_ordered_column}" >= {column_value}')
+        with Connection(endpoint=hyper.endpoint, database=path_to_database, parameters={"date_style": "YMD"}) as connection:
             # retrieve the remaining max value of the functional ordered column
             with connection.execute_query(query=f'SELECT max("{functional_ordered_column}") FROM {table_name}') as result:
                 rows = list(result)
                 functional_ordered_column_previous = rows[0][0]
-            logging.info(f"previous functional ordered column value: {functional_ordered_column_previous}")
     return rows_affected, functional_ordered_column_previous
 
 
-def datasource_prepare(server, project, ds, hyper_dir, download_dir):
+def datasource_prepare(server, project, ds):
     """Function that prepares the data source on the given server in the given project:
     - get the functional ordered column and the last update value of the reference table
     - clean up the hyper extract by deleting to be refreshed data
@@ -102,15 +98,15 @@ def datasource_prepare(server, project, ds, hyper_dir, download_dir):
         logging.debug("{0} ({1})".format(datasource.name, datasource.project_name))
         if datasource.name == ds and datasource.project_name == project:
             logging.info("{0}: {1}".format(datasource.name, datasource.project_name, datasource.id))
-            # if we got a hyper_dir, try getting the hyper file locally, i.e. do not include the data extract
-            if hyper_dir is None:
-                ds_file = server.datasources.download(datasource.id, filepath=WORK_DIR, include_extract=True)
-            else:
-                ds_file = server.datasources.download(datasource.id, filepath=WORK_DIR, include_extract=False)
+            ds_file = server.datasources.download(datasource.id, filepath=WORK_DIR, include_extract=True)
+            ds_file_zipped = None
             # extract the file if it is a zip, i.e. a .tdsx file
             if zipfile.is_zipfile(ds_file):
-                with zipfile.ZipFile(ds_file) as zf:
-                    zf.extractall()
+                ds_file_zipped = ds_file
+                ds_file = Path(ds_file_zipped).with_suffix('.tds')
+                with zipfile.ZipFile(ds_file_zipped) as zf:
+                    ds_file_infolist = list(zf.infolist())
+                    zf.extractall(path=WORK_DIR)
             # load the datasource from file and do some sanity checks
             tds = Datasource.from_file(ds_file)
             if not tds.has_extract():
@@ -131,26 +127,17 @@ def datasource_prepare(server, project, ds, hyper_dir, download_dir):
                 return
 
             # using the last update value, get the minimum involved value for the functional and ordered column
-            functional_ordered_column_value_min, last_update_value, functional_ordered_column_type = get_database_values(database, ds, last_update_value)
+            functional_ordered_column_value_min, last_update_value, last_update_value_prepared = \
+                get_database_values(database,
+                                    config['datasources'][ds]['reference_table'],
+                                    config['datasources'][ds]['functional_ordered_column'],
+                                    config['parameters']['update_datetime_column'],
+                                    last_update_value)
             if functional_ordered_column_value_min is None:
                 logging.info(f"no data to be processed for {datasource}")
                 return
-            hyper_file = tds.extract.connection.dbname
-            new_dbname = None
+            hyper_file = os.path.join(WORK_DIR, str(tds.extract.connection.dbname))
 
-            # if we got a hyper_dir, try getting the hyper file locally, i.e. copy it from that directory
-            # BTW, this works technically, but the publish will result in a Bad Request error by the server later on
-            if hyper_dir is not None:
-                hyper_file = os.path.join(os.pathsep, hyper_dir, tds.extract.connection.dbname)
-                work_hyper_file = os.path.join(os.pathsep, os.getcwd(), download_dir, tds.extract.connection.dbname)
-                new_dbname = download_dir + "/" + tds.extract.connection.dbname
-                logging.info(f"work hyper file: {work_hyper_file}")
-                target_dir = f"{os.path.dirname(work_hyper_file)}"
-                if not os.path.exists(target_dir):
-                    os.makedirs(target_dir)
-                shutil.copy2(hyper_file, target_dir)
-                logging.info(f"hyper file copied to: {target_dir}")
-                hyper_file = work_hyper_file
             logging.info(f"hyper file located at: {hyper_file}")
             # prepare the hyper file, i.e. delete all relevant, to be updated, data and get the previous value of the functional ordered column
             logging.info(f"datasource {ds}, minimum value for functional ordered column: {functional_ordered_column_value_min}")
@@ -164,22 +151,21 @@ def datasource_prepare(server, project, ds, hyper_dir, download_dir):
                 logging.error("something weird is going on: the incremental refresh deleted all base data, consider running a new full refresh")
                 return
             # set the previous value of the functional ordered column in the extract events so the incremental refresh gets the valid continuation point
+            # TODO: if there are no refresh events, create the first one ourselves
             tds.extract.refresh.refresh_events[-1].increment_value = datasource_quote_date(functional_ordered_column_value_previous)
-            if new_dbname is not None:
-                tds.extract.connection.dbname = new_dbname
             # save the new datasource file and upload it back to the server with the new hyper extract
             tds.save_as(ds_file)
+            with zipfile.ZipFile(ds_file_zipped, mode='w') as zf:
+                for item in ds_file_infolist:
+                    zf.write(os.path.join(WORK_DIR, item.filename), arcname=item.filename, compress_type=zipfile.ZIP_DEFLATED)
             credentials = ConnectionCredentials(config['databases'][database]['args']['user'],
                                                 config['databases'][database]['args']['password'], embed=True)
             new_ds = tsc.DatasourceItem(p.id)
             new_ds.name = ds
-            server.datasources.publish(new_ds, ds_file, mode=tsc.Server.PublishMode.Overwrite, connection_credentials=credentials)
+            server.datasources.publish(new_ds, ds_file_zipped, mode=tsc.Server.PublishMode.Overwrite, connection_credentials=credentials)
             # set the new last update value
-            logging.info(f"datasource {ds}, new update value: {last_update_value}")
-            if functional_ordered_column_type in {db.DATE, db.TIME, db.DATETIME, db.STRING, db.TEXT}:
-                updates['datasources'][ds]['last_update_value'] = f"'{last_update_value}'"
-            else:
-                updates['datasources'][ds]['last_update_value'] = last_update_value
+            logging.info(f"datasource {ds}, new update value: {last_update_value_prepared}")
+            updates['datasources'][ds]['last_update_value'] = last_update_value_prepared
 
 
 def update_incremental_schedule(server, project, ds):
@@ -197,7 +183,7 @@ def update_incremental_schedule(server, project, ds):
         interval_item = DailyInterval(start_time=time(now_plus_15.hour, math.floor(now_plus_15.minute/15)*15))
         schedule_to_update.interval_item = interval_item
         # update the schedule
-        logging.info(f"updated schedule {schedule_to_update.name} with {interval_item}")
+        logging.info(f"updated schedule {schedule_to_update.name} with {interval_item.start_time}")
         server.schedules.update(schedule_item=schedule_to_update)
 
 
@@ -225,8 +211,6 @@ def main():
     parser.add_argument('--site', '-S', default=None)
     parser.add_argument('--timeout', '-t', type=int, help='max wait time in seconds', default=0)
     parser.add_argument('--frequency', '-f', type=int, help='check frequency in seconds', default=10)
-    parser.add_argument('--hyper', '-H', required=False, help='local hyper directory (when executed on server)')
-    parser.add_argument('--download', '-D', required=False, help='local download directory for hyper extracts')
 
     parser.add_argument('--logging-level', '-l', choices=['debug', 'info', 'error'], default='error',
                         help='desired logging level (set to error by default)')
@@ -260,7 +244,7 @@ def main():
         projects = get_projects(server)
 
         for ds in args.datasource:
-            datasource_prepare(server, args.project, ds, args.hyper, args.download)
+            datasource_prepare(server, args.project, ds)
             update_incremental_schedule(server, args.project, ds)
 
             with open(config['parameters']['update_values'], 'w') as updates_file:
