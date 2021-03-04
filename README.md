@@ -18,6 +18,8 @@ This component fixes that: it uses the definition of specified data sources to p
 * it deploys the updated data source to the server
 * it schedules a regular incremental refresh
 
+![Updated data versus functional timestamp touched by this data](./docs/diagram.png)
+
 By cleaning the Hyper extract file from to-be-updated data and updating the incremental refresh information in the data source, the regular incremental refresh as performed by Tableau server can be applied succesfully again.
 This way, data source refreshes that could take hours for large data sources, data wise of history wise, can be performed within minutes.
 
