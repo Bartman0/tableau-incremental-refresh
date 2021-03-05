@@ -111,6 +111,18 @@ Why this complex workaround?: Tableau has not enabled a method to refresh a data
 Tableau server client API. There exists a refresh method for datasources, but this will _always_ do **full** refreshes.
 Hopefully this will change in the near future so we can get rid of this workaround and we can call an incremental refresh directly.
 
+## Tableau settings
+
+Datasources that are refreshed using this utility, must have extracts defined that have the incremental refresh enabled. See the
+diagram for an example. The column to use must match the setting of the **functional_ordered_column** in the configuration file. See the next
+paragraph for more details.
+
+![Datasource extract settings example](./docs/settings.png)
+
+The **functional_ordered_column** must have a stable value (i.e. should not change during the lifetime of the record it is part of), it therefore 
+is a functional column most of the time (order date, event data, etc), and it must have a value that is ordered over time. A functional date is
+probably the best choice for this, but if some sort of sequence can be used that has the same characteristics that will work also.
+
 ## Datasource configuration details
 
 In an accompanying configuration file, you must set the details for the datasource incremental refresh to be done effectively. The program needs
